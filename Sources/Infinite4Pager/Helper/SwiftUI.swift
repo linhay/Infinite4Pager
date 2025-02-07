@@ -23,58 +23,22 @@ extension View {
   }
 }
 
-public struct CurrentPage: Equatable {
-  public let horizontal: Int
-  public let vertical: Int
-  public init(horizontal: Int, vertical: Int) {
-    self.horizontal = horizontal
-    self.vertical = vertical
-  }
-}
-
-public struct CurrentPageKey: EnvironmentKey {
-  public static let defaultValue: CurrentPage? = nil
-}
-
-public struct Infinite4PagerIsDragging: EnvironmentKey {
-  public static let defaultValue = false
-}
-
 struct MainPageOffsetInfo: Equatable {
   let mainPagePercent: Double
   let direction: PageViewDirection
 }
 
-struct PageOffsetKey: EnvironmentKey {
-  static let defaultValue: MainPageOffsetInfo? = .init(mainPagePercent: 0, direction: .none)
-}
-
-struct PageTypeKey: EnvironmentKey {
-  static let defaultValue: PageType = .current
+extension EnvironmentValues {
+ 
+    @Entry var mainPageOffsetInfo: MainPageOffsetInfo? = .init(mainPagePercent: 0, direction: .none)
+    @Entry var pageType: PageType = .current
 }
 
 extension EnvironmentValues {
-  var mainPageOffsetInfo: MainPageOffsetInfo? {
-    get { self[PageOffsetKey.self] }
-    set { self[PageOffsetKey.self] = newValue }
-  }
-
-  var pageType: PageType {
-    get { self[PageTypeKey.self] }
-    set { self[PageTypeKey.self] = newValue }
-  }
-}
-
-extension EnvironmentValues {
-  public var pagerCurrentPage: CurrentPage? {
-    get { self[CurrentPageKey.self] }
-    set { self[CurrentPageKey.self] = newValue }
-  }
-
-  public var infinite4PagerIsDragging: Bool {
-    get { self[Infinite4PagerIsDragging.self] }
-    set { self[Infinite4PagerIsDragging.self] = newValue }
-  }
+    
+    @Entry public var infinite4PagerCurrentIndex = Infinite4PagerReducer.Point<Int>(horizontal: 0, vertical: 0)
+    
+    @Entry public var infinite4PagerIsDragging = false
 }
 
 struct OnPageVisibleModifier: ViewModifier {
@@ -96,13 +60,15 @@ struct OnPageVisibleModifier: ViewModifier {
     switch (pageType, info.direction) {
     case (.current, _):
       return 1.0 - abs(percent)
-    case (.leading, .horizontal), (.top, .vertical):
+    case (.leading, .left), (.leading, .right),
+        (.top, .top), (.top, .bottom):
       if percent > 0 {
         return 1 - (1 - percent)
       } else {
         return 0
       }
-    case (.trailing, .horizontal), (.bottom, .vertical):
+    case (.trailing, .left), (.trailing, .right),
+        (.bottom, .top), (.bottom, .bottom):
       if percent < 0 {
         return 1 - (1 + percent)
       } else {

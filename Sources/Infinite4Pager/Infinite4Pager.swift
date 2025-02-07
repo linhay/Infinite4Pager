@@ -7,378 +7,403 @@
 
 import SwiftUI
 
-public struct Infinite4Pager<Content: View>: View {
-  @State private var currentHorizontalPage: Int
-  @State private var currentVerticalPage: Int
-  @State private var offset: CGSize = .zero
-  @State private var dragDirection: PageViewDirection = .none
-  @State private var size: CGSize = .zero
-  @GestureState private var isDragging = false
-  @Environment(\.scenePhase) var scenePhase
-  @State private var cancelByDrag = false
-  private let edgeBouncyAnimation: Animation = .smooth
-
-  /// 横向总视图数量，nil 为无限
-  let totalHorizontalPage: Int?
-  /// 纵向总视图数量，nil 为无限
-  let totalVerticalPage: Int?
-  /// 横向翻页位移阈值，松开手指后，预测距离超过容器宽度的百分比，超过即翻页
-  let horizontalThresholdRatio: CGFloat
-  /// 纵向翻页位移阈值，松开手指后，预测距离超过容器高度的百分比，超过即翻页
-  let verticalThresholdRatio: CGFloat
-  /// 一个闭包，用于生成对应单元格的页面，参数为当前单元格的横竖位置
-  let getPage: (Int, Int) -> Content
-  /// 启用后，将生成更多的站位视图（ 为开启生成 4 个，开启后创建 8 个）。可以改善因滑动速度过快或弹性动画回弹效果过大产生的单元格空隙
-  let enableClipped: Bool
-  /// 翻页动画
-  let animation: Animation
-  /// 是否启用视图可见感知
-  let enablePageVisibility: Bool
-
-  public init(
-    /// 初始单元格横向位置
-    initialHorizontalPage: Int = 0,
-    /// 初始单元格纵向位置
-    initialVerticalPage: Int = 0,
-    totalHorizontalPage: Int? = nil,
-    totalVerticalPage: Int? = nil,
-    horizontalThresholdRatio: CGFloat = 0.33,
-    verticalThresholdRatio: CGFloat = 0.25,
-    animation: Animation = .easeOut(duration: 0.22),
-    enableClipped: Bool = true,
-    enablePageVisibility: Bool = false,
-    @ViewBuilder getPage: @escaping (Int, Int) -> Content
-  ) {
-    _currentHorizontalPage = State(initialValue: initialHorizontalPage)
-    _currentVerticalPage = State(initialValue: initialVerticalPage)
-    self.totalHorizontalPage = totalHorizontalPage
-    self.totalVerticalPage = totalVerticalPage
-    self.horizontalThresholdRatio = horizontalThresholdRatio
-    self.verticalThresholdRatio = verticalThresholdRatio
-    self.getPage = getPage
-    self.enableClipped = enableClipped
-    self.animation = animation
-    self.enablePageVisibility = enablePageVisibility
-  }
-
-  public var body: some View {
-    CurrentPageView(
-      currentHorizontalPage: currentHorizontalPage,
-      currentVerticalPage: currentVerticalPage,
-      totalHorizontalPage: totalHorizontalPage,
-      totalVerticalPage: totalVerticalPage,
-      size: size,
-      getPage: getPage
-    )
-    .disabled(isDragging)
-    .geometryGroup()
-    .offset(x: offset.width, y: offset.height)
-    .simultaneousGesture(
-      DragGesture()
-        .updating($isDragging) { _, isDragging, _ in
-          if !isDragging {
-            isDragging = true
-          }
-        }
-        .onChanged { value in
-          if dragDirection == .none {
-            let temp = abs(value.translation.width) > abs(value.translation.height) ? PageViewDirection.horizontal : .vertical
-            if totalHorizontalPage != 0, temp == .horizontal {
-              dragDirection = .horizontal
-            }
-            if totalVerticalPage != 0, temp == .vertical {
-              dragDirection = .vertical
-            }
-          }
-
-          var newOffset: CGSize = .zero
-          if dragDirection == .horizontal {
-            let limitedX = boundedDragOffset(
-              value.translation.width,
-              pageSize: size.width,
-              currentPage: currentHorizontalPage,
-              totalPages: totalHorizontalPage
-            )
-            newOffset = CGSize(width: limitedX, height: 0)
-          }
-
-          if dragDirection == .vertical {
-            let limitedY = boundedDragOffset(
-              value.translation.height,
-              pageSize: size.height,
-              currentPage: currentVerticalPage,
-              totalPages: totalVerticalPage
-            )
-            newOffset = CGSize(width: 0, height: limitedY)
-          }
-
-          offset = newOffset
-        }
-        .onEnded { value in
-          let pageSize = dragDirection == .horizontal ? size.width : size.height
-          let currentPage = dragDirection == .horizontal ? currentHorizontalPage : currentVerticalPage
-          let totalPages = dragDirection == .horizontal ? totalHorizontalPage : totalVerticalPage
-          let thresholdRatio = dragDirection == .horizontal ? horizontalThresholdRatio : verticalThresholdRatio
-
-          let translation = dragDirection == .horizontal ? value.predictedEndTranslation.width : value.predictedEndTranslation.height
-          let boundedTranslation = boundedDragOffset(translation, pageSize: pageSize, currentPage: currentPage, totalPages: totalPages)
-
-          let direction = -Int(translation / abs(translation))
-
-          let isAtBoundary = isAtBoundary(direction: direction)
-          if abs(boundedTranslation) > pageSize * thresholdRatio, !isAtBoundary {
-            let newOffset = CGSize(
-              width: dragDirection == .horizontal ? CGFloat(-direction) * pageSize : 0,
-              height: dragDirection == .vertical ? CGFloat(-direction) * pageSize : 0
-            )
-
-            withAnimation(animation) {
-              offset = newOffset
-            } completion: {
-              if dragDirection == .horizontal {
-                if let total = totalHorizontalPage {
-                  // 有限页面的情况
-                  currentHorizontalPage = (currentHorizontalPage + (direction == 1 ? 1 : -1) + total) % total
-                } else {
-                  // 无限滚动的情况
-                  currentHorizontalPage += direction == 1 ? 1 : -1
-                }
-              }
-
-              if dragDirection == .vertical {
-                if let total = totalVerticalPage {
-                  // 有限页面的情况
-                  currentVerticalPage = (currentVerticalPage + (direction == 1 ? 1 : -1) + total) % total
-                } else {
-                  // 无限滚动的情况
-                  currentVerticalPage += direction == 1 ? 1 : -1
-                }
-              }
-              dragDirection = .none
-            }
-          } else {
-            withAnimation(edgeBouncyAnimation) {
-              offset = .zero
-              dragDirection = .none
-            }
-          }
-          cancelByDrag = true
-        }
-    )
-    .onChange(of: isDragging) {
-      // 处理系统对拖动手势的打断
-      if !isDragging {
-        if !cancelByDrag {
-          withAnimation(edgeBouncyAnimation) {
-            offset = .zero
-          }
-        } else {
-          cancelByDrag = false
-        }
-      }
-    }
-    .onChange(of: currentVerticalPage) {
-      offset = .zero
-    }
-    .onChange(of: currentHorizontalPage) {
-      offset = .zero
-    }
-    .environment(\.infinite4PagerIsDragging, isDragging)
-    .environment(\.pagerCurrentPage, CurrentPage(horizontal: currentHorizontalPage, vertical: currentVerticalPage))
-    .transformEnvironment(\.mainPageOffsetInfo) { value in
-      if enablePageVisibility {
-        value = MainPageOffsetInfo(mainPagePercent: mainPagePercent(), direction: dragDirection)
-      }
-    }
-    .clipped(disable: !enableClipped)
-    .background(
-      GeometryReader { proxy in
-        let size = proxy.size
-        Color.clear
-          .task(id: size) { self.size = size }
-      }
-    )
-  }
-
-  // 根据 container size 和 offset，计算主视图的可见参考值
-  // 0 = 完全可见，横向时, -1 左侧完全移出，+1 右侧完全移出
-  // 纵向时， -1 向上完全移出，+1 向下完全移出
-  private func mainPagePercent() -> Double {
-    switch dragDirection {
-    case .horizontal:
-      offset.width / size.width
-    case .vertical:
-      offset.height / size.height
-    case .none:
-      0
-    }
-  }
-
-  // 判断是否为边界视图
-  private func isAtBoundary(direction: Int) -> Bool {
-    switch dragDirection {
-    case .horizontal:
-      if let total = totalHorizontalPage {
-        // 有限水平页面的情况
-        return (currentHorizontalPage == 0 && direction < 0) || (currentHorizontalPage == total - 1 && direction > 0)
-
-      } else {
-        // 无限水平滚动的情况
-        return false
-      }
-    case .vertical:
-      if let total = totalVerticalPage {
-        // 有限垂直页面的情况
-        return (currentVerticalPage == 0 && direction < 0) ||
-          (currentVerticalPage == total - 1 && direction > 0)
-      } else {
-        // 无限垂直滚动的情况
-        return false
-      }
-    case .none:
-      return false
-    }
-  }
-
-  private func boundedDragOffset(
-    _ offset: CGFloat,
-    pageSize: CGFloat,
-    currentPage: Int,
-    totalPages: Int?
-  ) -> CGFloat {
-    let maxThreshold = pageSize / 2
-
-    if let total = totalPages {
-      if (currentPage == 0 && offset > 0) || (currentPage == total - 1 && offset < 0) {
-        let absOffset = abs(offset)
-        let progress = min(absOffset / maxThreshold, 1.0)
-
-        // 使用更线性的阻尼函数
-        let dampeningFactor = 1 - progress * 0.5
-
-        let dampendOffset = absOffset * dampeningFactor
-        return offset > 0 ? dampendOffset : -dampendOffset
-      }
-    }
-    return offset
-  }
+enum PageType {
+    case current, leading, trailing, top, bottom
 }
 
-enum PageViewDirection {
-  case horizontal, vertical, none
+@Observable
+public class Infinite4PagerReducer {
+    
+    public struct Point<V: Equatable>: Equatable {
+        public var horizontal: V
+        public var vertical: V
+        
+        public init(horizontal: V, vertical: V) {
+            self.horizontal = horizontal
+            self.vertical = vertical
+        }
+    }
+    
+    public var offset: CGSize = .zero
+    public var dragDirection: PageViewDirection = .none
+    public var size: CGSize = .zero
+    
+    public var current: Point<Int>
+    /// 总视图数量，nil 为无限
+    public let total: Point<Int?>
+    /// 横向翻页位移阈值，松开手指后，预测距离超过容器宽度的百分比，超过即翻页
+    public var thresholdRatio: Point<CGFloat>
+    public let animation: Animation
+    public let edgeBouncyAnimation: Animation = .smooth
+    
+    /// 启用后，将生成更多的站位视图（ 为开启生成 4 个，开启后创建 8 个）。可以改善因滑动速度过快或弹性动画回弹效果过大产生的单元格空隙
+    let enableClipped: Bool
+    /// 是否启用视图可见感知
+    let enablePageVisibility: Bool
+    
+    public init(current: Point<Int> = .init(horizontal: 0, vertical: 0),
+                total: Point<Int?> = .init(horizontal: nil, vertical: nil),
+                thresholdRatio: Point<CGFloat> = .init(horizontal: 0.33, vertical: 0.25),
+                enableClipped: Bool = true,
+                enablePageVisibility: Bool = false,
+                animation: Animation = .easeOut(duration: 0.22)) {
+        self.current = current
+        self.total = total
+        self.thresholdRatio = thresholdRatio
+        self.enableClipped = enableClipped
+        self.enablePageVisibility = enablePageVisibility
+        self.animation = animation
+    }
+    
+    // 根据 container size 和 offset，计算主视图的可见参考值
+    // 0 = 完全可见，横向时, -1 左侧完全移出，+1 右侧完全移出
+    // 纵向时， -1 向上完全移出，+1 向下完全移出
+    func mainPagePercent() -> Double {
+        switch dragDirection {
+        case .left, .right:
+            offset.width / size.width
+        case .bottom, .top:
+            offset.height / size.height
+        case .none:
+            0
+        }
+    }
+    
+    // 判断是否为边界视图
+    func isAtBoundary(direction: Int) -> Bool {
+        switch dragDirection {
+        case .left, .right:
+            if let total = total.horizontal {
+                // 有限水平页面的情况
+                return (current.horizontal == 0 && direction < 0)
+                || (current.horizontal == total - 1 && direction > 0)
+                
+            } else {
+                // 无限水平滚动的情况
+                return false
+            }
+        case .top, .bottom:
+            if let total = total.vertical {
+                // 有限垂直页面的情况
+                return (current.vertical == 0 && direction < 0)
+                || (current.vertical == total - 1 && direction > 0)
+            } else {
+                // 无限垂直滚动的情况
+                return false
+            }
+        case .none:
+            return false
+        }
+    }
+    
+    func onDragChanged(translation: CGSize) {
+        
+        if dragDirection == .none {
+            if abs(translation.width) > abs(translation.height) {
+                dragDirection = translation.width > 0 ? .right : .left
+            } else {
+                dragDirection = translation.height > 0 ? .bottom : .top
+            }
+        }
+        
+        if dragDirection.isHorizontal {
+            let limitedX = boundedDragOffset(
+                translation.width,
+                pageSize: size.width,
+                currentPage: current.horizontal,
+                totalPages: total.horizontal
+            )
+            offset = CGSize(width: limitedX, height: 0)
+        } else if dragDirection.isVertical {
+            let limitedY = boundedDragOffset(
+                translation.height,
+                pageSize: size.height,
+                currentPage: current.vertical,
+                totalPages: total.vertical
+            )
+            offset = CGSize(width: 0, height: limitedY)
+        } else {
+            offset = .zero
+        }
+    }
+    
+    func onDragEnd(predictedEndTranslation: CGSize) {
+        let pageSize       = dragDirection.isHorizontal ? size.width : size.height
+        let currentPage    = dragDirection.isHorizontal ? current.horizontal : current.vertical
+        let totalPages     = dragDirection.isHorizontal ? total.horizontal : total.vertical
+        let thresholdRatio = dragDirection.isHorizontal ? thresholdRatio.horizontal : thresholdRatio.vertical
+        
+        let translation = dragDirection.isHorizontal ? predictedEndTranslation.width : predictedEndTranslation.height
+        let boundedTranslation = boundedDragOffset(translation, pageSize: pageSize, currentPage: currentPage, totalPages: totalPages)
+        
+        let direction = -Int(translation / abs(translation))
+        
+        let isAtBoundary = isAtBoundary(direction: direction)
+        if abs(boundedTranslation) > pageSize * thresholdRatio, !isAtBoundary {
+            let newOffset = CGSize(
+                width: dragDirection.isHorizontal ? CGFloat(-direction) * pageSize : 0,
+                height: dragDirection.isVertical ? CGFloat(-direction) * pageSize : 0
+            )
+            
+            withAnimation(animation) {
+                offset = newOffset
+            } completion: { [weak self] in
+                guard let self = self else { return }
+                if dragDirection.isHorizontal {
+                    if let total = total.horizontal {
+                        // 有限页面的情况
+                        current.horizontal = (current.horizontal + (direction == 1 ? 1 : -1) + total) % total
+                    } else {
+                        // 无限滚动的情况
+                        current.horizontal += direction == 1 ? 1 : -1
+                    }
+                }
+                
+                if dragDirection.isVertical {
+                    if let total = total.vertical {
+                        // 有限页面的情况
+                        current.vertical = (current.vertical + (direction == 1 ? 1 : -1) + total) % total
+                    } else {
+                        // 无限滚动的情况
+                        current.vertical += direction == 1 ? 1 : -1
+                    }
+                }
+                dragDirection = .none
+            }
+        } else {
+            withAnimation(edgeBouncyAnimation) {
+                offset = .zero
+                dragDirection = .none
+            }
+        }
+    }
+    
+    func boundedDragOffset(_ offset: CGFloat,
+                           pageSize: CGFloat,
+                           currentPage: Int,
+                           totalPages: Int?) -> CGFloat {
+        let maxThreshold = pageSize / 2
+        
+        if let total = totalPages {
+            if (currentPage == 0 && offset > 0) || (currentPage == total - 1 && offset < 0) {
+                let absOffset = abs(offset)
+                let progress = min(absOffset / maxThreshold, 1.0)
+                
+                // 使用更线性的阻尼函数
+                let dampeningFactor = 1 - progress * 0.5
+                
+                let dampendOffset = absOffset * dampeningFactor
+                return offset > 0 ? dampendOffset : -dampendOffset
+            }
+        }
+        return offset
+    }
+    
+}
+
+public struct Infinite4Pager<Content: View>: View {
+    
+    @State private var store: Infinite4PagerReducer
+    @GestureState private var isDragging = false
+    @Environment(\.scenePhase) var scenePhase
+    @State private var cancelByDrag = false
+    /// 一个闭包，用于生成对应单元格的页面，参数为当前单元格的横竖位置
+    let getPage: (_ index: Infinite4PagerReducer.Point<Int>) -> Content
+    
+    public init(store: Infinite4PagerReducer = Infinite4PagerReducer(),
+                @ViewBuilder getPage: @escaping (_ index: Infinite4PagerReducer.Point<Int>) -> Content) {
+        self.store = store
+        self.getPage = getPage
+    }
+    
+    public var body: some View {
+        CurrentPageView(store: store, getPage: getPage)
+            .disabled(isDragging)
+            .geometryGroup()
+            .offset(x: store.offset.width, y: store.offset.height)
+            .simultaneousGesture(
+                DragGesture()
+                    .updating($isDragging) { _, isDragging, _ in
+                        if !isDragging {
+                            isDragging = true
+                        }
+                    }
+                    .onChanged { value in
+                        store.onDragChanged(translation: value.translation)
+                    }
+                    .onEnded { value in
+                        store.onDragEnd(predictedEndTranslation: value.predictedEndTranslation)
+                        cancelByDrag = true
+                    }
+            )
+            .onChange(of: isDragging) {
+                // 处理系统对拖动手势的打断
+                if !isDragging {
+                    if !cancelByDrag {
+                        withAnimation(store.edgeBouncyAnimation) {
+                            store.offset = .zero
+                        }
+                    } else {
+                        cancelByDrag = false
+                    }
+                }
+            }
+            .onChange(of: store.current) {
+                store.offset = .zero
+            }
+            .environment(\.infinite4PagerIsDragging, isDragging)
+            .environment(\.infinite4PagerCurrentIndex, store.current)
+            .transformEnvironment(\.mainPageOffsetInfo) { value in
+                if store.enablePageVisibility {
+                    value = MainPageOffsetInfo(mainPagePercent: store.mainPagePercent(),
+                                               direction: store.dragDirection)
+                }
+            }
+            .clipped(disable: !store.enableClipped)
+            .background(
+                GeometryReader { proxy in
+                    let size = proxy.size
+                    Color.clear
+                        .task(id: size) { store.size = size }
+                }
+            )
+    }
+    
+    
+}
+
+public enum PageViewDirection {
+    case top, bottom, left, right, none
+    var isHorizontal: Bool {
+        self == .left || self == .right
+    }
+    var isVertical: Bool {
+        self == .top || self == .bottom
+    }
 }
 
 struct CurrentPageView<Content: View>: View {
-  let currentHorizontalPage: Int
-  let currentVerticalPage: Int
-  let totalHorizontalPage: Int?
-  let totalVerticalPage: Int?
-  let size: CGSize
-  let getPage: (Int, Int) -> Content
-
-  @Environment(\.mainPageOffsetInfo) var info
-
-  init(
-    currentHorizontalPage: Int,
-    currentVerticalPage: Int,
-    totalHorizontalPage: Int?,
-    totalVerticalPage: Int?,
-    size: CGSize,
-    getPage: @escaping (Int, Int) -> Content
-  ) {
-    self.currentHorizontalPage = currentHorizontalPage
-    self.currentVerticalPage = currentVerticalPage
-    self.totalHorizontalPage = totalHorizontalPage
-    self.totalVerticalPage = totalVerticalPage
-    self.size = size
-    self.getPage = getPage
-  }
-
-  var body: some View {
-    Color.clear
-      .overlay(alignment: .center) {
-        Grid(alignment: .center, horizontalSpacing: 0, verticalSpacing: 0) {
-          GridRow {
-            Color.clear
-              .frame(size: size)
-            // top
-            getAdjacentPage(direction: .vertical, offset: -1)
-              .frame(size: size)
-              .environment(\.pageType, .top)
-            Color.clear
-              .frame(size: size)
-          }
-          GridRow {
-            // leading
-            getAdjacentPage(direction: .horizontal, offset: -1)
-              .frame(size: size)
-              .environment(\.pageType, .leading)
-            // current
-            getPage(currentHorizontalPage, currentVerticalPage)
-              .frame(size: size)
-              .environment(\.pageType, .current)
-            // trailing
-            getAdjacentPage(direction: .horizontal, offset: 1)
-              .frame(size: size)
-              .environment(\.pageType, .trailing)
-          }
-          GridRow {
-            Color.clear
-              .frame(size: size)
-            // bottom
-            getAdjacentPage(direction: .vertical, offset: 1)
-              .frame(size: size)
-              .environment(\.pageType, .bottom)
-            Color.clear
-              .frame(size: size)
-          }
+    
+    @State var store: Infinite4PagerReducer
+    let getPage: (_ index: Infinite4PagerReducer.Point<Int>) -> Content
+    @Environment(\.mainPageOffsetInfo) var info
+    
+    init(store: Infinite4PagerReducer, getPage: @escaping (_ index: Infinite4PagerReducer.Point<Int>) -> Content) {
+        self.store = store
+        self.getPage = getPage
+    }
+    
+    var body: some View {
+        Color.clear
+            .overlay(alignment: .center) {
+                Grid(alignment: .center, horizontalSpacing: 0, verticalSpacing: 0) {
+                    GridRow {
+                        Color.clear
+                            .frame(size: store.size)
+                        // top
+                        getAdjacentPage(direction: .top, offset: -1)
+                            .frame(size: store.size)
+                            .environment(\.pageType, .top)
+                        Color.clear
+                            .frame(size: store.size)
+                    }
+                    GridRow {
+                        // leading
+                        getAdjacentPage(direction: .left, offset: -1)
+                            .frame(size: store.size)
+                            .environment(\.pageType, .leading)
+                        // current
+                        getPage(store.current)
+                            .frame(size: store.size)
+                            .environment(\.pageType, .current)
+                        // trailing
+                        getAdjacentPage(direction: .right, offset: 1)
+                            .frame(size: store.size)
+                            .environment(\.pageType, .trailing)
+                    }
+                    GridRow {
+                        Color.clear
+                            .frame(size: store.size)
+                        // bottom
+                        getAdjacentPage(direction: .bottom, offset: 1)
+                            .frame(size: store.size)
+                            .environment(\.pageType, .bottom)
+                        Color.clear
+                            .frame(size: store.size)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .id("\(store.current.horizontal),\(store.current.vertical)")
+    }
+    
+    private func getAdjacentPage(direction: PageViewDirection, offset: Int) -> some View {
+        let nextPage: Int?
+        let currentPage: Int
+        let totalPages: Int?
+        
+        switch direction {
+        case .left, .right:
+            currentPage = store.current.horizontal
+            totalPages = store.total.horizontal
+            nextPage = getNextPage(currentPage, total: totalPages, direction: offset)
+        case .top, .bottom:
+            currentPage = store.current.vertical
+            totalPages = store.total.vertical
+            nextPage = getNextPage(currentPage, total: totalPages, direction: offset)
+        case .none:
+            fatalError()
         }
-      }
-      .contentShape(Rectangle())
-      .id("\(currentHorizontalPage),\(currentVerticalPage)")
-  }
-
-  private func getAdjacentPage(direction: PageViewDirection, offset: Int) -> some View {
-    let nextPage: Int?
-    let currentPage: Int
-    let totalPages: Int?
-
-    switch direction {
-    case .horizontal:
-      currentPage = currentHorizontalPage
-      totalPages = totalHorizontalPage
-      nextPage = getNextPage(currentPage, total: totalPages, direction: offset)
-    case .vertical:
-      currentPage = currentVerticalPage
-      totalPages = totalVerticalPage
-      nextPage = getNextPage(currentPage, total: totalPages, direction: offset)
-    case .none:
-      fatalError()
+        
+        return Group {
+            if let nextPage = nextPage {
+                Color.clear
+                    .overlay(
+                        direction.isHorizontal
+                        ? getPage(.init(horizontal: nextPage, vertical: store.current.vertical))
+                        : getPage(.init(horizontal: store.current.horizontal, vertical: nextPage))
+                    )
+            } else {
+                Color.clear
+            }
+        }
     }
-
-    return Group {
-      if let nextPage = nextPage {
-        Color.clear
-          .overlay(
-            direction == .horizontal
-              ? getPage(nextPage, currentVerticalPage)
-              : getPage(currentHorizontalPage, nextPage)
-          )
-      } else {
-        Color.clear
-      }
+    
+    private func getNextPage(_ current: Int, total: Int?, direction: Int) -> Int? {
+        if let total = total {
+            let next = current + direction
+            return (0 ..< total).contains(next) ? next : nil
+        }
+        return current + direction
     }
-  }
-
-  private func getNextPage(_ current: Int, total: Int?, direction: Int) -> Int? {
-    if let total = total {
-      let next = current + direction
-      return (0 ..< total).contains(next) ? next : nil
-    }
-    return current + direction
-  }
 }
 
-enum PageType {
-  case current, leading, trailing, top, bottom
+#Preview {
+    let store = Infinite4PagerReducer(current: .init(horizontal: 2, vertical: 2),
+                                      total: .init(horizontal: nil, vertical: nil),
+                                      enableClipped: false,
+                                      enablePageVisibility: true)
+    let colors = [Color.red, .green, .blue, .yellow, .purple]
+    Infinite4Pager(store: store) { index in
+        colors[abs(index.horizontal + index.vertical) % colors.count]
+            .overlay(alignment: .bottom) {
+                VStack(alignment: .leading) {
+                    Text("index: h(\(index.horizontal))-v(\(index.vertical))")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("direction: \(store.dragDirection)")
+                    Text(String(format: "offset: %.2f, %.2f",
+                                store.offset.width,
+                                store.offset.height))
+                }
+                .fontDesign(.monospaced)
+                .font(.body)
+                .fontWeight(.medium)
+                .foregroundStyle(.white)
+                .padding()
+                .background(RoundedRectangle(cornerRadius: 12).fill(.black))
+                .padding()
+                .scenePadding()
+            }
+    }
+    .ignoresSafeArea()
 }
